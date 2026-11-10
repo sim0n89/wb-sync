@@ -5,16 +5,20 @@ namespace App\Services\Wildberries;
 use App\Exceptions\Wildberries\RateLimitExceededException;
 use App\Models\Shop;
 use App\Services\Wildberries\Data\OrdersPageDto;
+use App\Services\Wildberries\Data\StockItemDto;
 use Carbon\CarbonInterface;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Sleep;
+use InvalidArgumentException;
 
 class WildberriesClient
 {
     public const int MAX_LIMIT = 1000;
+
+    public const int MAX_STOCKS_PER_REQUEST = 1000;
 
     /**
      * Create a new class instance.
@@ -49,16 +53,37 @@ class WildberriesClient
             $query['dateTo'] = $to->getTimestamp();
         }
 
-        $response = $this->send('/api/v3/orders', $query);
+        $response = $this->send('GET', '/api/v3/orders', ['query' => $query]);
 
         return OrdersPageDto::fromWildberries($response->json());
     }
 
-    private function send(string $path, array $query): Response
+    /**
+     * @param  array<int, StockItemDto>  $items
+     */
+    public function updateStocks(int $wbWarehouseId, array $items): void
+    {
+        if ($items === [] || count($items) > self::MAX_STOCKS_PER_REQUEST) {
+            throw new InvalidArgumentException('Wildberries accepts from 1 to '.self::MAX_STOCKS_PER_REQUEST.' stocks per request.');
+        }
+
+        $stocks = [];
+
+        foreach ($items as $item) {
+            $stocks[] = [
+                'chrtId' => $item->chrtId,
+                'amount' => $item->amount,
+            ];
+        }
+
+        $this->send('PUT', "/api/v3/stocks/{$wbWarehouseId}", ['json' => ['stocks' => $stocks]]);
+    }
+
+    private function send(string $method, string $path, array $options): Response
     {
         $this->waitForRateLimit();
 
-        $response = $this->getRequest()->get($path, $query);
+        $response = $this->getRequest()->send($method, $path, $options);
 
         if ($response->status() === 429) {
             throw new RateLimitExceededException($this->getRetryAfter($response));

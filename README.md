@@ -1,59 +1,97 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# wb-sync
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+Сервис синхронизации магазинов Wildberries: забирает FBS-заказы из Marketplace API и хранит каталог товаров,
+склады и остатки для последующей выгрузки в WB.
 
-## About Laravel
+Стек: PHP 8.4, Laravel 12, MySQL 8.4, Redis, Horizon, Pest.
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+## Возможности
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+- **Магазины** — несколько магазинов WB, у каждого свой API-токен (хранится в БД зашифрованным).
+- **Заказы** — инкрементальная загрузка `GET /api/v3/orders` по курсору `next`: каждые 5 минут
+  планировщик ставит в очередь задачу `SyncShopOrders` на каждый активный магазин. Заказы пишутся через
+  upsert по `(shop_id, wb_order_id)`, курсор сохраняется после каждой страницы, поэтому прерванная
+  синхронизация продолжается с места остановки.
+- **Лимиты WB** — клиент сам ограничивает частоту запросов на токен (`WB_REQUESTS_PER_SECOND`), а при
+  ответе 429 задача возвращается в очередь через `X-Ratelimit-Retry` секунд.
+- **Защита от дублей** — задача уникальна на магазин и не выполняется параллельно (`ShouldBeUnique` +
+  `WithoutOverlapping`), планировщик запускается `onOneServer`.
+- **Каталог и остатки** — товары, размеры (`chrt_id`), баркоды, склады и остатки по складам. Остатки помнят
+  последнее выгруженное в WB значение (`synced_amount`), клиент умеет отправлять их в
+  `PUT /api/v3/stocks/{warehouseId}` пачками до 1000 позиций. Регулярная выгрузка остатков — в работе.
+- **Эмулятор WB** — в окружениях `local` и `testing` доступен фейковый `GET /fake-wb/api/v3/orders` с
+  генерируемыми заказами и опциональным rate limit, чтобы гонять синхронизацию без настоящего токена.
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+## Запуск в Docker
 
-## Learning Laravel
+```bash
+cp .env.example .env
+docker compose up -d --build
+docker compose exec app composer install
+docker compose exec app php artisan key:generate
+docker compose exec app php artisan migrate
+```
 
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework. You can also check out [Laravel Learn](https://laravel.com/learn), where you will be guided through building a modern Laravel application.
+Сервисы `compose.yaml`:
 
-If you don't feel like reading, [Laracasts](https://laracasts.com) can help. Laracasts contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
+| Сервис      | Назначение                                     |
+|-------------|------------------------------------------------|
+| `app`       | `php artisan serve`, http://localhost:8030      |
+| `horizon`   | обработчик очередей (Redis)                     |
+| `scheduler` | `php artisan schedule:work`                     |
+| `mysql`     | MySQL 8.4, с хоста — `127.0.0.1:3312`           |
+| `redis`     | очереди, кеш, rate limiter                      |
 
-## Laravel Sponsors
+Тестовая база `wb_sync_testing` создаётся при первом старте MySQL (`docker/mysql/init.sql`).
+Локальные переопределения (порты, сеть) — в `compose.override.yaml`, он не коммитится.
 
-We would like to extend our thanks to the following sponsors for funding Laravel development. If you are interested in becoming a sponsor, please visit the [Laravel Partners program](https://partners.laravel.com).
+## Настройки `.env`
 
-### Premium Partners
+| Переменная               | По умолчанию                              | Описание                                         |
+|--------------------------|-------------------------------------------|--------------------------------------------------|
+| `WB_MARKETPLACE_URL`     | `https://marketplace-api.wildberries.ru`  | базовый URL Marketplace API                      |
+| `WB_REQUESTS_PER_SECOND` | `5`                                       | сколько запросов в секунду делать с одного токена |
+| `FAKE_WB_RATE_LIMIT`     | `0`                                       | лимит запросов в секунду у эмулятора, `0` — без лимита |
 
-- **[Vehikl](https://vehikl.com)**
-- **[Tighten Co.](https://tighten.co)**
-- **[Kirschbaum Development Group](https://kirschbaumdevelopment.com)**
-- **[64 Robots](https://64robots.com)**
-- **[Curotec](https://www.curotec.com/services/technologies/laravel)**
-- **[DevSquad](https://devsquad.com/hire-laravel-developers)**
-- **[Redberry](https://redberry.international/laravel-development)**
-- **[Active Logic](https://activelogic.com)**
+## Команды
 
-## Contributing
+```bash
+# добавить магазин (токен спрашивается скрыто)
+php artisan app:create-shop "Мой магазин"
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+# поставить в очередь синхронизацию заказов всех активных магазинов (то же делает планировщик)
+php artisan app:sync-orders
 
-## Code of Conduct
+# эмулятор: добавить N сгенерированных заказов для токена
+php artisan app:fake-wb-add-orders <token> 100
+```
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+## Синхронизация с эмулятором
 
-## Security Vulnerabilities
+1. В `.env` указать `WB_MARKETPLACE_URL=http://app:8000/fake-wb` — по этому адресу контейнер `horizon`
+   достучится до `app` (при `network_mode: host` — `http://127.0.0.1:8030/fake-wb`).
+2. Создать магазин с любым токеном: `php artisan app:create-shop Test`.
+3. Нагенерировать заказы под этот токен: `php artisan app:fake-wb-add-orders <token> 2500`.
+4. Запустить `php artisan app:sync-orders` и смотреть задачи в Horizon: http://localhost:8030/horizon.
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+Чтобы проверить обработку 429, задать `FAKE_WB_RATE_LIMIT` меньше `WB_REQUESTS_PER_SECOND`.
 
-## License
+## Тесты
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+```bash
+docker compose exec app php artisan test
+```
+
+Тесты работают с базой `wb_sync_testing` (см. `phpunit.xml`), HTTP к WB подменяется `Http::fake()` или
+эмулятором.
+
+## Структура
+
+```
+app/Console/Commands/       artisan-команды
+app/Jobs/SyncShopOrders     синхронизация заказов одного магазина
+app/Services/Wildberries/   HTTP-клиент WB и DTO ответов
+app/Services/FakeWildberries/, app/Http/Controllers/FakeWildberries/   эмулятор WB
+routes/console.php          расписание
+routes/fake-wb.php          маршруты эмулятора
+```
