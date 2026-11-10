@@ -37,6 +37,7 @@ return [
 
     'wildberries' => [
         'marketplace_url' => env('WB_MARKETPLACE_URL', 'https://marketplace-api.wildberries.ru'),
+        'fake_rate_limit' => env('FAKE_WB_RATE_LIMIT', 0),
     ],
 
 ];
