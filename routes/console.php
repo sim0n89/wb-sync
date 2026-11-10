@@ -12,3 +12,8 @@ Schedule::command('app:sync-orders')
     ->everyFiveMinutes()
     ->withoutOverlapping()
     ->onOneServer();
+
+Schedule::command('app:push-stocks')
+    ->everyFiveMinutes()
+    ->withoutOverlapping()
+    ->onOneServer();
