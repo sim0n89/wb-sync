@@ -3,7 +3,6 @@
 namespace App\Jobs;
 
 use App\Enums\StockUploadStatus;
-use App\Exceptions\Wildberries\RateLimitExceededException;
 use App\Jobs\Concerns\ShopJob;
 use App\Models\Order;
 use App\Models\Shop;
@@ -19,7 +18,6 @@ use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Http\Client\RequestException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
-use Throwable;
 
 class VerifyShopStocks implements ShouldBeUnique, ShouldQueue
 {
@@ -60,7 +58,6 @@ class VerifyShopStocks implements ShouldBeUnique, ShouldQueue
         }
 
         $client = WildberriesClient::forShop($this->shop);
-        $firstError = null;
 
         $uploads = StockUpload::query()
             ->where('shop_id', $this->shop->id)
@@ -74,33 +71,18 @@ class VerifyShopStocks implements ShouldBeUnique, ShouldQueue
             ->orderBy('id')
             ->get();
 
-        foreach ($uploads->groupBy('warehouse_id') as $warehouseUploads) {
-            foreach ($warehouseUploads->chunk(self::UPLOADS_PER_CHECK) as $chunk) {
-                if ($this->isTimeBudgetExceeded()) {
-                    break 2;
-                }
-
-                try {
-                    $this->verifyUploads($client, $chunk);
-                } catch (RateLimitExceededException $e) {
-                    if ($firstError !== null) {
-                        throw $firstError;
+        $this->runForEachGroup(
+            $uploads->groupBy('warehouse_id'),
+            function (Collection $warehouseUploads) use ($client): void {
+                foreach ($warehouseUploads->chunk(self::UPLOADS_PER_CHECK) as $chunk) {
+                    if ($this->isTimeBudgetExceeded()) {
+                        return;
                     }
 
-                    $this->release($e->retryAfter);
-
-                    return;
-                } catch (Throwable $e) {
-                    $firstError ??= $e;
-
-                    break;
+                    $this->verifyUploads($client, $chunk);
                 }
-            }
-        }
-
-        if ($firstError !== null) {
-            throw $firstError;
-        }
+            },
+        );
     }
 
     protected function getSharedOverlapKey(): ?string

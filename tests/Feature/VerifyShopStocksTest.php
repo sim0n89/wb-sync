@@ -496,3 +496,45 @@ test('upload where nothing could be judged is not reported as verified', functio
     expect($upload->fresh()->status)->toBe(StockUploadStatus::Unverified)
         ->and($upload->fresh()->verified_at)->toBeNull();
 });
+
+test('error on one warehouse skips its remaining uploads but not other warehouses', function () {
+    $shop = Shop::factory()->ordersSynced()->create();
+    $broken = Warehouse::factory()->for($shop)->create(['wb_warehouse_id' => 1]);
+    $healthy = Warehouse::factory()->for($shop)->create(['wb_warehouse_id' => 2]);
+
+    $brokenUploads = collect(range(1, VerifyShopStocks::UPLOADS_PER_CHECK + 1))
+        ->map(fn (int $chrtId) => sentUpload($broken, [$chrtId => 5]));
+    $healthyUpload = sentUpload($healthy, [500 => 7]);
+
+    Http::fake([
+        'wb.test/api/v3/stocks/1' => Http::response(null, 500),
+        'wb.test/api/v3/stocks/2' => Http::response(['stocks' => [['chrtId' => 500, 'amount' => 7]]]),
+    ]);
+
+    expect(function () use ($shop) {
+        VerifyShopStocks::dispatchSync($shop);
+    })->toThrow(RequestException::class);
+
+    Http::assertSentCount(2);
+    expect($healthyUpload->fresh()->status)->toBe(StockUploadStatus::Verified)
+        ->and(StockUpload::whereKey($brokenUploads->pluck('id'))->pluck('status')->unique()->all())
+        ->toBe([StockUploadStatus::Sent]);
+});
+
+test('verification stops when the time budget is spent and the rest is checked next time', function () {
+    $shop = Shop::factory()->ordersSynced()->create();
+    $first = sentUpload(Warehouse::factory()->for($shop)->create(['wb_warehouse_id' => 1]), [1 => 5]);
+    $later = sentUpload(Warehouse::factory()->for($shop)->create(['wb_warehouse_id' => 2]), [2 => 7]);
+
+    Http::fake(function (Request $request) {
+        $this->travel(250)->seconds();
+
+        return Http::response(['stocks' => [['chrtId' => $request->data()['chrtIds'][0], 'amount' => $request->data()['chrtIds'][0] === 1 ? 5 : 7]]]);
+    });
+
+    VerifyShopStocks::dispatchSync($shop);
+
+    Http::assertSentCount(1);
+    expect($first->fresh()->status)->toBe(StockUploadStatus::Verified)
+        ->and($later->fresh()->status)->toBe(StockUploadStatus::Sent);
+});

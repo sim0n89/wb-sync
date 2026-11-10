@@ -68,7 +68,6 @@ class PushShopStocks implements ShouldBeUnique, ShouldQueue
         }
 
         $client = WildberriesClient::forShop($this->shop);
-        $firstError = null;
         $this->splitRequestsLeft = self::MAX_SPLIT_REQUESTS;
 
         $warehouses = $this->shop->warehouses()
@@ -78,29 +77,10 @@ class PushShopStocks implements ShouldBeUnique, ShouldQueue
             ->orderBy('id')
             ->get();
 
-        foreach ($warehouses as $warehouse) {
-            if ($this->isTimeBudgetExceeded()) {
-                break;
-            }
-
-            try {
-                $this->pushWarehouse($client, $warehouse);
-            } catch (RateLimitExceededException $e) {
-                if ($firstError !== null) {
-                    throw $firstError;
-                }
-
-                $this->release($e->retryAfter);
-
-                return;
-            } catch (Throwable $e) {
-                $firstError ??= $e;
-            }
-        }
-
-        if ($firstError !== null) {
-            throw $firstError;
-        }
+        $this->runForEachGroup(
+            $warehouses,
+            fn (Warehouse $warehouse) => $this->pushWarehouse($client, $warehouse),
+        );
     }
 
     private function pushWarehouse(WildberriesClient $client, Warehouse $warehouse): void

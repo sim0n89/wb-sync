@@ -2,9 +2,12 @@
 
 namespace App\Jobs\Concerns;
 
+use App\Exceptions\Wildberries\RateLimitExceededException;
 use App\Models\Shop;
 use Carbon\CarbonImmutable;
+use Closure;
 use Illuminate\Queue\Middleware\WithoutOverlapping;
+use Throwable;
 
 trait ShopJob
 {
@@ -66,6 +69,38 @@ trait ShopJob
     protected function shouldWaitWhenBusy(): bool
     {
         return false;
+    }
+
+    /**
+     * @param  iterable<mixed>  $groups
+     */
+    private function runForEachGroup(iterable $groups, Closure $work): void
+    {
+        $firstError = null;
+
+        foreach ($groups as $group) {
+            if ($this->isTimeBudgetExceeded()) {
+                break;
+            }
+
+            try {
+                $work($group);
+            } catch (RateLimitExceededException $e) {
+                if ($firstError !== null) {
+                    throw $firstError;
+                }
+
+                $this->release($e->retryAfter);
+
+                return;
+            } catch (Throwable $e) {
+                $firstError ??= $e;
+            }
+        }
+
+        if ($firstError !== null) {
+            throw $firstError;
+        }
     }
 
     private function isTimeBudgetExceeded(): bool

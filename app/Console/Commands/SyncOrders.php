@@ -2,12 +2,14 @@
 
 namespace App\Console\Commands;
 
+use App\Console\Commands\Concerns\DispatchesShopJobs;
 use App\Jobs\SyncShopOrders;
-use App\Models\Shop;
 use Illuminate\Console\Command;
 
 class SyncOrders extends Command
 {
+    use DispatchesShopJobs;
+
     /**
      * The name and signature of the console command.
      *
@@ -27,15 +29,6 @@ class SyncOrders extends Command
      */
     public function handle(): int
     {
-        $count = 0;
-
-        foreach (Shop::active()->lazyById() as $shop) {
-            SyncShopOrders::dispatch($shop);
-            $count++;
-        }
-
-        $this->info("Queued orders sync for {$count} shop(s).");
-
-        return self::SUCCESS;
+        return $this->dispatchForActiveShops(SyncShopOrders::class, 'orders sync');
     }
 }

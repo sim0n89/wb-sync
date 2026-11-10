@@ -2,12 +2,14 @@
 
 namespace App\Console\Commands;
 
+use App\Console\Commands\Concerns\DispatchesShopJobs;
 use App\Jobs\PushShopStocks;
-use App\Models\Shop;
 use Illuminate\Console\Command;
 
 class PushStocks extends Command
 {
+    use DispatchesShopJobs;
+
     /**
      * The name and signature of the console command.
      *
@@ -27,15 +29,6 @@ class PushStocks extends Command
      */
     public function handle(): int
     {
-        $count = 0;
-
-        foreach (Shop::active()->lazyById() as $shop) {
-            PushShopStocks::dispatch($shop);
-            $count++;
-        }
-
-        $this->info("Queued stocks push for {$count} shop(s).");
-
-        return self::SUCCESS;
+        return $this->dispatchForActiveShops(PushShopStocks::class, 'stocks push');
     }
 }
