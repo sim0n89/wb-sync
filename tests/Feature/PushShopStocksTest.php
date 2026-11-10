@@ -358,14 +358,12 @@ test('push rejected by wildberries keeps what was synced before', function () {
     expect($stock->fresh()->synced_amount)->toBe(5);
 });
 
-test('synced stocks are marked with one query per distinct amount plus one to clear old errors', function () {
+test('synced stocks with different amounts are marked with one query plus one to clear old errors', function () {
     Http::fake(['wb.test/*' => Http::response(null, 204)]);
 
     $shop = Shop::factory()->create();
     $warehouse = Warehouse::factory()->for($shop)->create();
-    foreach ([5, 5, 5, 0, 0, 7] as $i => $amount) {
-        stockFor($warehouse, 200 + $i, $amount);
-    }
+    $stocks = collect([5, 5, 5, 0, 0, 7])->map(fn (int $amount, int $i) => stockFor($warehouse, 200 + $i, $amount));
 
     $updates = 0;
     DB::listen(function ($query) use (&$updates) {
@@ -376,8 +374,8 @@ test('synced stocks are marked with one query per distinct amount plus one to cl
 
     PushShopStocks::dispatchSync($shop);
 
-    expect($updates)->toBe(4)
-        ->and(Stock::needsSync()->count())->toBe(0);
+    expect($updates)->toBe(2)
+        ->and($stocks->map(fn (Stock $stock) => $stock->fresh()->synced_amount)->all())->toBe([5, 5, 5, 0, 0, 7]);
 });
 
 test('upload is recorded as in progress before the request is sent', function () {

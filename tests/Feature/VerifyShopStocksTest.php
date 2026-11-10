@@ -9,6 +9,7 @@ use App\Models\ProductSize;
 use App\Models\Shop;
 use App\Models\Stock;
 use App\Models\StockUpload;
+use App\Models\StockUploadItem;
 use App\Models\Warehouse;
 use App\Services\FakeWildberries\FakeStockStore;
 use App\Services\Wildberries\WildberriesClient;
@@ -60,7 +61,7 @@ function sentUpload(Warehouse $warehouse, array $amounts, int $minutesAgo = 5): 
 test('client reads stocks with post and chrt ids', function () {
     Http::fake(['wb.test/*' => Http::response(['stocks' => [['chrtId' => 1, 'amount' => 11]]])]);
 
-    $amounts = (new WildberriesClient('token', 'https://wb.test'))->getStocks(507, [1, 2]);
+    $amounts = (new WildberriesClient('token', 'https://wb.test', 'https://content.test'))->getStocks(507, [1, 2]);
 
     expect($amounts)->toBe([1 => 11]);
     Http::assertSent(function (Request $request) {
@@ -537,4 +538,23 @@ test('verification stops when the time budget is spent and the rest is checked n
     Http::assertSentCount(1);
     expect($first->fresh()->status)->toBe(StockUploadStatus::Verified)
         ->and($later->fresh()->status)->toBe(StockUploadStatus::Sent);
+});
+
+test('each missed stock is counted and sent again by its own amount when several are written at once', function () {
+    $shop = Shop::factory()->ordersSynced()->create();
+    sentUpload(Warehouse::factory()->for($shop)->create(['wb_warehouse_id' => 507]), [1 => 5, 2 => 7, 3 => 2]);
+
+    Http::fake(['wb.test/*' => Http::response(['stocks' => [
+        ['chrtId' => 1, 'amount' => 8],
+        ['chrtId' => 2, 'amount' => 9],
+        ['chrtId' => 3, 'amount' => 2],
+    ]])]);
+
+    VerifyShopStocks::dispatchSync($shop);
+
+    $stocks = Stock::with('size')->get()->keyBy('size.chrt_id');
+
+    expect($stocks->map(fn (Stock $stock) => [$stock->not_applied_count, $stock->synced_amount])->sortKeys()->all())
+        ->toBe([1 => [1, null], 2 => [1, null], 3 => [0, 2]])
+        ->and(StockUploadItem::orderBy('chrt_id')->pluck('wb_amount')->all())->toBe([8, 9, 2]);
 });

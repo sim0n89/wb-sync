@@ -62,7 +62,7 @@ test('it passes the period as unix timestamps', function () {
     $from = Carbon::parse('2026-11-01 00:00:00', 'UTC');
     $to = Carbon::parse('2026-11-10 00:00:00', 'UTC');
 
-    (new WildberriesClient('token', 'https://wb.test'))->getOrders(from: $from, to: $to);
+    (new WildberriesClient('token', 'https://wb.test', 'https://content.test'))->getOrders(from: $from, to: $to);
 
     Http::assertSent(function (Request $request) use ($from, $to) {
         return $request['dateFrom'] === $from->getTimestamp()
@@ -73,7 +73,7 @@ test('it passes the period as unix timestamps', function () {
 test('limit is capped by wildberries maximum', function () {
     Http::fake(['wb.test/*' => Http::response(['next' => 0, 'orders' => []])]);
 
-    (new WildberriesClient('token', 'https://wb.test'))->getOrders(limit: 5000);
+    (new WildberriesClient('token', 'https://wb.test', 'https://content.test'))->getOrders(limit: 5000);
 
     Http::assertSent(function (Request $request) {
         return $request['limit'] === WildberriesClient::MAX_LIMIT;
@@ -83,7 +83,7 @@ test('limit is capped by wildberries maximum', function () {
 test('empty response gives an empty page', function () {
     Http::fake(['wb.test/*' => Http::response(['next' => 0, 'orders' => []])]);
 
-    $page = (new WildberriesClient('token', 'https://wb.test'))->getOrders();
+    $page = (new WildberriesClient('token', 'https://wb.test', 'https://content.test'))->getOrders();
 
     expect($page->isEmpty())->toBeTrue()
         ->and($page->next)->toBe(0);
@@ -92,5 +92,5 @@ test('empty response gives an empty page', function () {
 test('error response throws', function () {
     Http::fake(['wb.test/*' => Http::response(['title' => 'unauthorized'], 401)]);
 
-    (new WildberriesClient('bad-token', 'https://wb.test'))->getOrders();
+    (new WildberriesClient('bad-token', 'https://wb.test', 'https://content.test'))->getOrders();
 })->throws(RequestException::class);

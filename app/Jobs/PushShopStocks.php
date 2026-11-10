@@ -13,6 +13,7 @@ use App\Models\StockUpload;
 use App\Models\Warehouse;
 use App\Services\Wildberries\Data\StockItemDto;
 use App\Services\Wildberries\WildberriesClient;
+use App\Support\ValuesById;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Database\Eloquent\Collection;
@@ -228,14 +229,10 @@ class PushShopStocks implements ShouldBeUnique, ShouldQueue
      */
     private function markSynced(Collection $batch): void
     {
-        $now = now();
-
-        foreach ($this->getIdsByAmount($batch) as $amount => $ids) {
-            Stock::whereKey($ids)->update([
-                'synced_amount' => $amount,
-                'synced_at' => $now,
-            ]);
-        }
+        Stock::whereKey($batch->modelKeys())->update([
+            'synced_amount' => ValuesById::toCase(Stock::class, $this->getAmountsById($batch)),
+            'synced_at' => now(),
+        ]);
 
         Stock::whereKey($batch->modelKeys())
             ->whereNotNull('failed_code')
@@ -247,32 +244,21 @@ class PushShopStocks implements ShouldBeUnique, ShouldQueue
      */
     private function markStocksFailed(Collection $stocks, string $code, string $message): void
     {
-        $now = now();
-
-        foreach ($this->getIdsByAmount($stocks) as $amount => $ids) {
-            Stock::whereKey($ids)
-                ->update([
-                    'failed_amount' => $amount,
-                    'failed_at' => $now,
-                    'failed_code' => $code,
-                    'failed_message' => Str::limit($message, 1000),
-                ]);
-        }
+        Stock::whereKey($stocks->modelKeys())->update([
+            'failed_amount' => ValuesById::toCase(Stock::class, $this->getAmountsById($stocks)),
+            'failed_at' => now(),
+            'failed_code' => $code,
+            'failed_message' => Str::limit($message, 1000),
+        ]);
     }
 
     /**
      * @param  Collection<int, Stock>  $stocks
-     * @return array<int, array<int, int>>
+     * @return array<int, int>
      */
-    private function getIdsByAmount(Collection $stocks): array
+    private function getAmountsById(Collection $stocks): array
     {
-        $idsByAmount = [];
-
-        foreach ($stocks as $stock) {
-            $idsByAmount[$stock->amount][] = $stock->id;
-        }
-
-        return $idsByAmount;
+        return $stocks->mapWithKeys(fn (Stock $stock) => [$stock->id => $stock->amount])->all();
     }
 
     private function markFailed(StockUpload $upload, Throwable $e): void

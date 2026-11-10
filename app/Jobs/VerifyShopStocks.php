@@ -10,6 +10,7 @@ use App\Models\Stock;
 use App\Models\StockUpload;
 use App\Models\StockUploadItem;
 use App\Services\Wildberries\WildberriesClient;
+use App\Support\ValuesById;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Database\Eloquent\Builder;
@@ -218,10 +219,10 @@ class VerifyShopStocks implements ShouldBeUnique, ShouldQueue
      */
     private function verifyUpload(StockUpload $upload, Collection $items, array $wbAmounts, array $lastOrderAt, array $latestItemIds): void
     {
-        $itemIdsByWbAmount = [];
+        $wbAmountsByItemId = [];
         $mismatches = [];
-        $missedStockIdsByAmount = [];
-        $resendStockIdsByAmount = [];
+        $missedAmountsByStockId = [];
+        $resendAmountsByStockId = [];
         $recoveredStockIds = [];
         $judged = 0;
 
@@ -233,7 +234,7 @@ class VerifyShopStocks implements ShouldBeUnique, ShouldQueue
             }
 
             $judged++;
-            $itemIdsByWbAmount[$wbAmount ?? 0][] = $item->id;
+            $wbAmountsByItemId[$item->id] = $wbAmount ?? 0;
 
             if (($wbAmount ?? 0) === $item->amount) {
                 if ($item->stock->not_applied_count > 0) {
@@ -246,26 +247,27 @@ class VerifyShopStocks implements ShouldBeUnique, ShouldQueue
             $mismatches[] = ['item' => $item, 'wb_amount' => $wbAmount];
 
             if ($item->stock->failed_code === null) {
-                $missedStockIdsByAmount[$item->amount][] = $item->stock_id;
+                $missedAmountsByStockId[$item->stock_id] = $item->amount;
 
                 if (($wbAmount ?? 0) > $item->amount) {
-                    $resendStockIdsByAmount[$item->amount][] = $item->stock_id;
+                    $resendAmountsByStockId[$item->stock_id] = $item->amount;
                 }
             }
         }
 
-        DB::transaction(function () use ($upload, $itemIdsByWbAmount, $mismatches, $missedStockIdsByAmount, $resendStockIdsByAmount, $recoveredStockIds, $judged) {
-            foreach ($itemIdsByWbAmount as $wbAmount => $ids) {
-                StockUploadItem::whereKey($ids)->update(['wb_amount' => $wbAmount]);
+        DB::transaction(function () use ($upload, $wbAmountsByItemId, $mismatches, $missedAmountsByStockId, $resendAmountsByStockId, $recoveredStockIds, $judged) {
+            if ($wbAmountsByItemId !== []) {
+                StockUploadItem::whereKey(array_keys($wbAmountsByItemId))
+                    ->update(['wb_amount' => ValuesById::toCase(StockUploadItem::class, $wbAmountsByItemId)]);
             }
 
             if ($recoveredStockIds !== []) {
                 Stock::whereKey($recoveredStockIds)->update(['not_applied_count' => 0, 'not_applied_at' => null]);
             }
 
-            foreach ($missedStockIdsByAmount as $amount => $ids) {
-                Stock::whereKey($ids)
-                    ->where('synced_amount', $amount)
+            if ($missedAmountsByStockId !== []) {
+                Stock::whereKey(array_keys($missedAmountsByStockId))
+                    ->where('synced_amount', ValuesById::toCase(Stock::class, $missedAmountsByStockId))
                     ->whereNull('failed_code')
                     ->update([
                         'not_applied_count' => DB::raw('LEAST(not_applied_count + 1, '.self::MAX_NOT_APPLIED_COUNT.')'),
@@ -273,9 +275,9 @@ class VerifyShopStocks implements ShouldBeUnique, ShouldQueue
                     ]);
             }
 
-            foreach ($resendStockIdsByAmount as $amount => $ids) {
-                Stock::whereKey($ids)
-                    ->where('synced_amount', $amount)
+            if ($resendAmountsByStockId !== []) {
+                Stock::whereKey(array_keys($resendAmountsByStockId))
+                    ->where('synced_amount', ValuesById::toCase(Stock::class, $resendAmountsByStockId))
                     ->whereNull('failed_code')
                     ->update(['synced_amount' => null, 'synced_at' => null]);
             }

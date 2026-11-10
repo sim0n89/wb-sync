@@ -318,3 +318,21 @@ test('reset command also clears a pending miss counter', function () {
 
     expect($stock->fresh()->not_applied_count)->toBe(0);
 });
+
+test('each rejected item keeps its own amount when several are marked at once', function () {
+    $shop = Shop::factory()->create();
+    $warehouse = Warehouse::factory()->for($shop)->create();
+    $rejected = collect([101 => 5, 102 => 7, 103 => 0])
+        ->map(fn (int $amount, int $chrtId) => rejectedStock($warehouse, $chrtId, $amount));
+    $good = rejectedStock($warehouse, 104, 3);
+
+    Http::fake(['wb.test/*' => Http::sequence()
+        ->push(wbRejection('SubjectRestriction', [['chrtId' => 101], ['chrtId' => 102], ['chrtId' => 103]]), 409)
+        ->push(null, 204),
+    ]);
+
+    PushShopStocks::dispatchSync($shop);
+
+    expect($rejected->map(fn (Stock $stock) => $stock->fresh()->failed_amount)->all())->toBe([101 => 5, 102 => 7, 103 => 0])
+        ->and($good->fresh()->synced_amount)->toBe(3);
+});

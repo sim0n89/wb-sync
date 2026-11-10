@@ -16,7 +16,7 @@ beforeEach(function () {
 
 function wbStocksClient(): WildberriesClient
 {
-    return new WildberriesClient('shop-token', 'https://wb.test');
+    return new WildberriesClient('shop-token', 'https://wb.test', 'https://content.test');
 }
 
 test('stocks are sent with put to the warehouse url', function () {

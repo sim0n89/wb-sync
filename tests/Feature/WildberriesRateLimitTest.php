@@ -23,7 +23,7 @@ test('429 is turned into exception with retry delay from header', function () {
     ]);
 
     try {
-        (new WildberriesClient('token', 'https://wb.test'))->getOrders();
+        (new WildberriesClient('token', 'https://wb.test', 'https://content.test'))->getOrders();
     } catch (RateLimitExceededException $e) {
         expect($e->retryAfter)->toBe(7);
 
@@ -37,7 +37,7 @@ test('429 without header uses default delay', function () {
     Http::fake(['wb.test/*' => Http::response([], 429)]);
 
     expect(function () {
-        (new WildberriesClient('token', 'https://wb.test'))->getOrders();
+        (new WildberriesClient('token', 'https://wb.test', 'https://content.test'))->getOrders();
     })->toThrow(function (RateLimitExceededException $e) {
         expect($e->retryAfter)->toBe(RateLimitExceededException::DEFAULT_RETRY_AFTER);
     });
@@ -49,7 +49,7 @@ test('client waits instead of exceeding its own request rate', function () {
 
     Http::fake(['wb.test/*' => Http::response(['next' => 0, 'orders' => []])]);
 
-    $client = new WildberriesClient('token', 'https://wb.test', requestsPerSecond: 2);
+    $client = new WildberriesClient('token', 'https://wb.test', 'https://content.test', requestsPerSecond: 2);
 
     $client->getOrders();
     $client->getOrders();
