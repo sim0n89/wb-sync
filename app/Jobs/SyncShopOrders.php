@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Exceptions\Wildberries\RateLimitExceededException;
 use App\Models\Order;
 use App\Models\Shop;
 use App\Services\Wildberries\Data\OrdersPageDto;
@@ -15,7 +16,9 @@ class SyncShopOrders implements ShouldQueue
 
     public const int MAX_PAGES = 100;
 
-    public int $tries = 3;
+    public int $tries = 10;
+
+    public int $maxExceptions = 3;
 
     public int $timeout = 300;
 
@@ -36,7 +39,13 @@ class SyncShopOrders implements ShouldQueue
         $client = WildberriesClient::forShop($this->shop);
 
         for ($page = 0; $page < self::MAX_PAGES; $page++) {
-            $ordersPage = $client->getOrders(next: $this->shop->orders_cursor);
+            try {
+                $ordersPage = $client->getOrders(next: $this->shop->orders_cursor);
+            } catch (RateLimitExceededException $e) {
+                $this->release($e->retryAfter);
+
+                return;
+            }
 
             if ($ordersPage->isEmpty()) {
                 break;

@@ -26,7 +26,11 @@ class OrdersController extends Controller
 
         if ($rateLimit > 0) {
             if (RateLimiter::tooManyAttempts($rateKey, $rateLimit)) {
-                return $this->getError(429, 'too many requests', 'limited by fake rate limit');
+                return $this->getError(429, 'too many requests', 'limited by fake rate limit')->withHeaders([
+                    'X-Ratelimit-Retry' => max(1, RateLimiter::availableIn($rateKey)),
+                    'X-Ratelimit-Limit' => $rateLimit,
+                    'X-Ratelimit-Reset' => max(1, RateLimiter::availableIn($rateKey)),
+                ]);
             }
 
             RateLimiter::hit($rateKey, 1);

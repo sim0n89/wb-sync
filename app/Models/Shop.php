@@ -22,6 +22,11 @@ class Shop extends Model
         'orders_synced_at',
     ];
 
+    protected $attributes = [
+        'is_active' => true,
+        'orders_cursor' => 0,
+    ];
+
     protected $hidden = [
         'wb_token',
     ];
