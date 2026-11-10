@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Exceptions\Wildberries\RateLimitExceededException;
+use App\Jobs\Concerns\ShopJob;
 use App\Models\Order;
 use App\Models\Shop;
 use App\Services\Wildberries\Data\OrdersPageDto;
@@ -10,42 +11,22 @@ use App\Services\Wildberries\WildberriesClient;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
-use Illuminate\Queue\Middleware\WithoutOverlapping;
 
 class SyncShopOrders implements ShouldBeUnique, ShouldQueue
 {
     use Queueable;
+    use ShopJob;
 
     public const int MAX_PAGES = 100;
-
-    public int $tries = 10;
-
-    public int $maxExceptions = 3;
-
-    public int $timeout = 300;
-
-    public int $uniqueFor = 900;
 
     /**
      * Create a new job instance.
      */
     public function __construct(public Shop $shop) {}
 
-    public function uniqueId(): string
+    public function getShop(): Shop
     {
-        return (string) $this->shop->id;
-    }
-
-    /**
-     * @return array<int, object>
-     */
-    public function middleware(): array
-    {
-        return [
-            (new WithoutOverlapping((string) $this->shop->id))
-                ->dontRelease()
-                ->expireAfter($this->timeout + 60),
-        ];
+        return $this->shop;
     }
 
     /**
@@ -60,6 +41,10 @@ class SyncShopOrders implements ShouldBeUnique, ShouldQueue
         $client = WildberriesClient::forShop($this->shop);
 
         for ($page = 0; $page < self::MAX_PAGES; $page++) {
+            if ($this->isTimeBudgetExceeded()) {
+                return;
+            }
+
             try {
                 $ordersPage = $client->getOrders(next: $this->shop->orders_cursor);
             } catch (RateLimitExceededException $e) {

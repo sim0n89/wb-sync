@@ -3,11 +3,13 @@
 namespace App\Services\Wildberries;
 
 use App\Exceptions\Wildberries\RateLimitExceededException;
+use App\Exceptions\Wildberries\StocksRejectedException;
 use App\Models\Shop;
 use App\Services\Wildberries\Data\OrdersPageDto;
 use App\Services\Wildberries\Data\StockItemDto;
 use Carbon\CarbonInterface;
 use Illuminate\Http\Client\PendingRequest;
+use Illuminate\Http\Client\RequestException;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\RateLimiter;
@@ -76,7 +78,15 @@ class WildberriesClient
             ];
         }
 
-        $this->send('PUT', "/api/v3/stocks/{$wbWarehouseId}", ['json' => ['stocks' => $stocks]]);
+        try {
+            $this->send('PUT', "/api/v3/stocks/{$wbWarehouseId}", ['json' => ['stocks' => $stocks]]);
+        } catch (RequestException $e) {
+            if (StocksRejectedException::isRejection($e->response)) {
+                throw StocksRejectedException::fromResponse($e->response, $e);
+            }
+
+            throw $e;
+        }
     }
 
     private function send(string $method, string $path, array $options): Response

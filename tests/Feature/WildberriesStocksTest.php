@@ -1,10 +1,10 @@
 <?php
 
 use App\Exceptions\Wildberries\RateLimitExceededException;
+use App\Exceptions\Wildberries\StocksRejectedException;
 use App\Services\Wildberries\Data\StockItemDto;
 use App\Services\Wildberries\WildberriesClient;
 use Illuminate\Http\Client\Request;
-use Illuminate\Http\Client\RequestException;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Sleep;
 use Illuminate\Validation\ValidationException;
@@ -90,7 +90,7 @@ test('wildberries error on stocks update throws', function () {
     Http::fake(['wb.test/*' => Http::response(['code' => 'IncorrectRequestBody', 'message' => 'Incorrect required body'], 400)]);
 
     wbStocksClient()->updateStocks(658434, [new StockItemDto(chrtId: 1, amount: 1)]);
-})->throws(RequestException::class);
+})->throws(StocksRejectedException::class);
 
 test('negative amount is rejected by dto validation', function () {
     StockItemDto::validateAndCreate(['chrtId' => 1, 'amount' => -1]);

@@ -14,12 +14,18 @@ class Stock extends Model
     /** @use HasFactory<StockFactory> */
     use HasFactory;
 
+    public const int FAILED_RETRY_HOURS = 24;
+
     protected $fillable = [
         'warehouse_id',
         'product_size_id',
         'amount',
         'synced_amount',
         'synced_at',
+        'failed_amount',
+        'failed_at',
+        'failed_code',
+        'failed_message',
     ];
 
     protected $attributes = [
@@ -32,6 +38,8 @@ class Stock extends Model
             'amount' => 'integer',
             'synced_amount' => 'integer',
             'synced_at' => 'datetime',
+            'failed_amount' => 'integer',
+            'failed_at' => 'datetime',
         ];
     }
 
@@ -51,6 +59,16 @@ class Stock extends Model
         $query->where(function (Builder $query) {
             $query->whereNull('synced_amount')
                 ->orWhereColumn('amount', '!=', 'synced_amount');
+        })->where(function (Builder $query) {
+            $query->whereNull('failed_amount')
+                ->orWhereColumn('amount', '!=', 'failed_amount')
+                ->orWhere('failed_at', '<=', now()->subHours(self::FAILED_RETRY_HOURS));
         });
+    }
+
+    #[Scope]
+    protected function failed(Builder $query): void
+    {
+        $query->whereNotNull('failed_at');
     }
 }
