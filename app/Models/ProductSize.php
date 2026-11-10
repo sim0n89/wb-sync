@@ -28,4 +28,9 @@ class ProductSize extends Model
     {
         return $this->hasMany(ProductBarcode::class);
     }
+
+    public function stocks(): HasMany
+    {
+        return $this->hasMany(Stock::class);
+    }
 }

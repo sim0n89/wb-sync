@@ -51,6 +51,11 @@ class Shop extends Model
         return $this->hasMany(Product::class);
     }
 
+    public function warehouses(): HasMany
+    {
+        return $this->hasMany(Warehouse::class);
+    }
+
     #[Scope]
     protected function active(Builder $query): void
     {
