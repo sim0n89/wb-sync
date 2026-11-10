@@ -7,10 +7,12 @@ use App\Models\Order;
 use App\Models\Shop;
 use App\Services\Wildberries\Data\OrdersPageDto;
 use App\Services\Wildberries\WildberriesClient;
+use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Queue\Middleware\WithoutOverlapping;
 
-class SyncShopOrders implements ShouldQueue
+class SyncShopOrders implements ShouldBeUnique, ShouldQueue
 {
     use Queueable;
 
@@ -22,10 +24,29 @@ class SyncShopOrders implements ShouldQueue
 
     public int $timeout = 300;
 
+    public int $uniqueFor = 900;
+
     /**
      * Create a new job instance.
      */
     public function __construct(public Shop $shop) {}
+
+    public function uniqueId(): string
+    {
+        return (string) $this->shop->id;
+    }
+
+    /**
+     * @return array<int, object>
+     */
+    public function middleware(): array
+    {
+        return [
+            (new WithoutOverlapping((string) $this->shop->id))
+                ->dontRelease()
+                ->expireAfter($this->timeout + 60),
+        ];
+    }
 
     /**
      * Execute the job.
