@@ -1,0 +1,44 @@
+x-php: &php
+  image: wb-sync-php
+  build:
+    context: docker/php
+    network: host
+  volumes:
+    - .:/app
+  depends_on:
+    - mysql
+    - redis
+
+services:
+  app:
+    <<: *php
+    ports:
+      - "8030:8000"
+    command: php artisan serve --host=0.0.0.0 --port=8000
+
+  horizon:
+    <<: *php
+    command: php artisan horizon
+
+  scheduler:
+    <<: *php
+    command: php artisan schedule:work
+
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: wb_sync
+      MYSQL_USER: wb_sync
+      MYSQL_PASSWORD: secret
+      MYSQL_ROOT_PASSWORD: secret
+    ports:
+      - "127.0.0.1:3312:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./docker/mysql/init.sql:/docker-entrypoint-initdb.d/init.sql
+
+  redis:
+    image: redis:7-alpine
+
+volumes:
+  mysql-data:
