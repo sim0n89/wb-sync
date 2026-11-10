@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Attributes\Scope;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Shop extends Model
 {
@@ -29,6 +30,11 @@ class Shop extends Model
             'wb_token' => 'encrypted',
             'is_active' => 'boolean',
         ];
+    }
+
+    public function orders(): HasMany
+    {
+        return $this->hasMany(Order::class);
     }
 
     #[Scope]
