@@ -35,4 +35,8 @@ return [
         ],
     ],
 
+    'wildberries' => [
+        'marketplace_url' => env('WB_MARKETPLACE_URL', 'https://marketplace-api.wildberries.ru'),
+    ],
+
 ];
