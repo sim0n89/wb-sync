@@ -18,6 +18,8 @@ class Shop extends Model
         'name',
         'wb_token',
         'is_active',
+        'orders_cursor',
+        'orders_synced_at',
     ];
 
     protected $hidden = [
@@ -29,6 +31,8 @@ class Shop extends Model
         return [
             'wb_token' => 'encrypted',
             'is_active' => 'boolean',
+            'orders_cursor' => 'integer',
+            'orders_synced_at' => 'datetime',
         ];
     }
 
