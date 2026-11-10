@@ -89,6 +89,27 @@ class WildberriesClient
         }
     }
 
+    /**
+     * @param  array<int, int>  $chrtIds
+     * @return array<int, int> chrtId => amount, sizes unknown to Wildberries are absent
+     */
+    public function getStocks(int $wbWarehouseId, array $chrtIds): array
+    {
+        if ($chrtIds === [] || count($chrtIds) > self::MAX_STOCKS_PER_REQUEST) {
+            throw new InvalidArgumentException('Wildberries accepts from 1 to '.self::MAX_STOCKS_PER_REQUEST.' sizes per request.');
+        }
+
+        $response = $this->send('POST', "/api/v3/stocks/{$wbWarehouseId}", ['json' => ['chrtIds' => array_values($chrtIds)]]);
+
+        $amounts = [];
+
+        foreach ($response->json('stocks') ?? [] as $stock) {
+            $amounts[(int) $stock['chrtId']] = (int) $stock['amount'];
+        }
+
+        return $amounts;
+    }
+
     private function send(string $method, string $path, array $options): Response
     {
         $this->waitForRateLimit();

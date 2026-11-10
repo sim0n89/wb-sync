@@ -70,6 +70,19 @@ test('blocked warehouse gets 406', function () {
     fakeWbPut('token', 507, ['stocks' => [['chrtId' => 1, 'amount' => 5]]])->assertNoContent();
 });
 
+test('emulator reads stocks back and can silently drop a size', function () {
+    $store = app(FakeStockStore::class);
+    $store->setChrtDropped('token', 2, true);
+
+    fakeWbPut('token', 507, ['stocks' => [['chrtId' => 1, 'amount' => 5], ['chrtId' => 2, 'amount' => 7]]])->assertNoContent();
+
+    $this->postJson('/fake-wb/api/v3/stocks/507', ['chrtIds' => [1, 2]], ['Authorization' => 'token'])
+        ->assertOk()
+        ->assertExactJson(['stocks' => [['chrtId' => 1, 'amount' => 5]]]);
+
+    $this->postJson('/fake-wb/api/v3/stocks/507', ['chrtIds' => []], ['Authorization' => 'token'])->assertStatus(400);
+});
+
 test('push job works against the emulator including hidden rejection', function () {
     Sleep::fake(syncWithCarbon: true);
     $this->freezeTime();

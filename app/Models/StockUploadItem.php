@@ -17,7 +17,17 @@ class StockUploadItem extends Model
         'stock_id',
         'chrt_id',
         'amount',
+        'wb_amount',
     ];
+
+    protected function casts(): array
+    {
+        return [
+            'chrt_id' => 'integer',
+            'amount' => 'integer',
+            'wb_amount' => 'integer',
+        ];
+    }
 
     public function upload(): BelongsTo
     {

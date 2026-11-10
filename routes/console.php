@@ -1,5 +1,6 @@
 <?php
 
+use App\Models\StockUpload;
 use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Schedule;
@@ -15,5 +16,15 @@ Schedule::command('app:sync-orders')
 
 Schedule::command('app:push-stocks')
     ->everyFiveMinutes()
+    ->withoutOverlapping()
+    ->onOneServer();
+
+Schedule::command('app:verify-stocks')
+    ->cron('3-59/10 * * * *')
+    ->withoutOverlapping()
+    ->onOneServer();
+
+Schedule::command('model:prune', ['--model' => [StockUpload::class]])
+    ->dailyAt('04:00')
     ->withoutOverlapping()
     ->onOneServer();

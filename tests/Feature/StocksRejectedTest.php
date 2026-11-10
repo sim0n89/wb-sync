@@ -20,7 +20,8 @@ uses(RefreshDatabase::class);
 
 beforeEach(function () {
     Http::preventStrayRequests();
-    Sleep::fake();
+    Sleep::fake(syncWithCarbon: true);
+    $this->freezeTime();
     config(['services.wildberries.marketplace_url' => 'https://wb.test']);
 });
 
@@ -75,14 +76,101 @@ test('wildberries errors are split into three types', function (int $status, str
     'warehouse not found' => [404, 'NotFound', StocksErrorType::Request],
 ]);
 
-test('rejected chrt ids are read from data in any of the known shapes', function () {
+test('each rejected chrt id keeps the code of its own error group', function () {
     $body = json_encode([
         ['code' => 'NotFound', 'message' => 'Not found', 'data' => [['chrtId' => 101, 'amount' => 1], 102]],
-        ['code' => 'TnvedRequired', 'message' => 'Add HS code', 'data' => [['chrtId' => 103]]],
+        ['code' => 'TnvedRequired', 'message' => 'Add HS code', 'data' => ['chrtId' => 103, 'amount' => 5]],
     ]);
     $response = new Response(new GuzzleHttp\Psr7\Response(409, [], $body));
 
-    expect(StocksRejectedException::fromResponse($response)->chrtIds)->toBe([101, 102, 103]);
+    $e = StocksRejectedException::fromResponse($response);
+
+    expect(array_keys($e->itemErrors))->toBe([101, 103])
+        ->and($e->itemErrors[101]['code'])->toBe('NotFound')
+        ->and($e->itemErrors[103]['code'])->toBe('TnvedRequired');
+});
+
+test('temporary code in the first group does not hide item errors in the next one', function () {
+    $body = json_encode([
+        ['code' => 'UploadDataLimit', 'message' => 'Upload limit exceeded.', 'data' => []],
+        ['code' => 'SubjectRestriction', 'message' => 'Category restricted', 'data' => [['chrtId' => 101]]],
+    ]);
+    $response = new Response(new GuzzleHttp\Psr7\Response(409, [], $body));
+
+    $e = StocksRejectedException::fromResponse($response);
+
+    expect($e->type)->toBe(StocksErrorType::Item)
+        ->and($e->errorCode)->toBe('SubjectRestriction')
+        ->and(array_keys($e->itemErrors))->toBe([101]);
+});
+
+test('different item errors are saved on the right stocks', function () {
+    $shop = Shop::factory()->create();
+    $warehouse = Warehouse::factory()->for($shop)->create();
+    $notFound = rejectedStock($warehouse, 101, 5);
+    $noHsCode = rejectedStock($warehouse, 102, 5);
+    $good = rejectedStock($warehouse, 103, 5);
+
+    Http::fake(['wb.test/*' => Http::sequence()
+        ->push([
+            ['code' => 'NotFound', 'message' => 'Not found', 'data' => [['chrtId' => 101]]],
+            ['code' => 'TnvedRequired', 'message' => 'Add HS code', 'data' => [['chrtId' => 102]]],
+        ], 409)
+        ->push(null, 204),
+    ]);
+
+    PushShopStocks::dispatchSync($shop);
+
+    expect($notFound->fresh()->failed_code)->toBe('NotFound')
+        ->and($noHsCode->fresh()->failed_code)->toBe('TnvedRequired')
+        ->and($good->fresh()->synced_amount)->toBe(5);
+});
+
+test('splitting a batch is capped and untried stocks are not blamed', function () {
+    $shop = Shop::factory()->create();
+    $warehouse = Warehouse::factory()->for($shop)->create();
+    $product = Product::factory()->for($shop)->create();
+    $sizes = ProductSize::factory()->for($product)->count(200)->create();
+
+    $rows = [];
+    foreach ($sizes as $size) {
+        $rows[] = ['warehouse_id' => $warehouse->id, 'product_size_id' => $size->id, 'amount' => 1];
+    }
+    Stock::insert($rows);
+
+    Http::fake(['wb.test/*' => Http::response(wbRejection('SubjectRestriction'), 409)]);
+
+    PushShopStocks::dispatchSync($shop);
+
+    $failed = Stock::failed()->count();
+
+    Http::assertSentCount(PushShopStocks::MAX_SPLIT_REQUESTS + 1);
+    expect($failed)->toBeGreaterThan(0)->toBeLessThan(200)
+        ->and(Stock::needsSync()->count())->toBe(200 - $failed)
+        ->and(Stock::whereNotNull('synced_amount')->count())->toBe(0);
+});
+
+test('splitting stops when the time budget is spent', function () {
+    $this->freezeTime();
+
+    $shop = Shop::factory()->create();
+    $warehouse = Warehouse::factory()->for($shop)->create();
+    foreach ([101, 102, 103, 104] as $chrtId) {
+        rejectedStock($warehouse, $chrtId, 1);
+    }
+
+    Http::fake(function () {
+        $this->travel(250)->seconds();
+
+        return Http::response(wbRejection('TnvedRequired'), 409);
+    });
+
+    PushShopStocks::dispatchSync($shop);
+
+    Http::assertSentCount(1);
+    expect(Stock::failed()->count())->toBe(0)
+        ->and(Stock::needsSync()->count())->toBe(4)
+        ->and(StockUpload::where('status', StockUploadStatus::InProgress)->count())->toBe(0);
 });
 
 test('single error object without list is understood too', function () {
@@ -211,4 +299,22 @@ test('reset command clears errors of one shop only', function () {
 
     expect($mine->fresh()->failed_at)->toBeNull()
         ->and($other->fresh()->failed_at)->not->toBeNull();
+});
+
+test('reset command rejects an unknown shop', function () {
+    $this->artisan('app:reset-stock-errors', ['shop' => 999999])
+        ->expectsOutput('Shop not found.')
+        ->assertFailed();
+});
+
+test('reset command also clears a pending miss counter', function () {
+    $shop = Shop::factory()->create();
+    $stock = rejectedStock(Warehouse::factory()->for($shop)->create(), 101, 5);
+    $stock->update(['not_applied_count' => 1, 'not_applied_at' => now()]);
+
+    $this->artisan('app:reset-stock-errors', ['shop' => $shop->id])
+        ->expectsOutput('Cleared errors for 1 stock(s).')
+        ->assertSuccessful();
+
+    expect($stock->fresh()->not_applied_count)->toBe(0);
 });

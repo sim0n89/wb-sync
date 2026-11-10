@@ -8,13 +8,15 @@ use Illuminate\Queue\Middleware\WithoutOverlapping;
 
 trait ShopJob
 {
+    public const int BUSY_RELEASE_SECONDS = 60;
+
     public int $tries = 20;
 
     public int $maxExceptions = 3;
 
     public int $timeout = 300;
 
-    public int $uniqueFor = 3600;
+    public int $uniqueFor = 900;
 
     public int $timeBudget = 240;
 
@@ -40,11 +42,30 @@ trait ShopJob
      */
     public function middleware(): array
     {
-        return [
-            (new WithoutOverlapping((string) $this->getShop()->id))
-                ->dontRelease()
-                ->expireAfter($this->timeout + 60),
-        ];
+        $sharedKey = $this->getSharedOverlapKey();
+
+        $overlap = (new WithoutOverlapping($sharedKey ?? (string) $this->getShop()->id))
+            ->expireAfter($this->timeout + 60);
+
+        if ($sharedKey !== null) {
+            $overlap->shared();
+        }
+
+        if ($this->shouldWaitWhenBusy()) {
+            return [$overlap->releaseAfter(self::BUSY_RELEASE_SECONDS)];
+        }
+
+        return [$overlap->dontRelease()];
+    }
+
+    protected function getSharedOverlapKey(): ?string
+    {
+        return null;
+    }
+
+    protected function shouldWaitWhenBusy(): bool
+    {
+        return false;
     }
 
     private function isTimeBudgetExceeded(): bool

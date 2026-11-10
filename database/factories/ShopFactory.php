@@ -23,4 +23,11 @@ class ShopFactory extends Factory
             'is_active' => true,
         ];
     }
+
+    public function ordersSynced(): static
+    {
+        return $this->state(function () {
+            return ['orders_synced_at' => now()];
+        });
+    }
 }

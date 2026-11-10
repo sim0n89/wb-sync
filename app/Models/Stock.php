@@ -16,6 +16,13 @@ class Stock extends Model
 
     public const int FAILED_RETRY_HOURS = 24;
 
+    public const array NO_FAILURE = [
+        'failed_amount' => null,
+        'failed_at' => null,
+        'failed_code' => null,
+        'failed_message' => null,
+    ];
+
     protected $fillable = [
         'warehouse_id',
         'product_size_id',
@@ -26,10 +33,13 @@ class Stock extends Model
         'failed_at',
         'failed_code',
         'failed_message',
+        'not_applied_count',
+        'not_applied_at',
     ];
 
     protected $attributes = [
         'amount' => 0,
+        'not_applied_count' => 0,
     ];
 
     protected function casts(): array
@@ -40,6 +50,8 @@ class Stock extends Model
             'synced_at' => 'datetime',
             'failed_amount' => 'integer',
             'failed_at' => 'datetime',
+            'not_applied_count' => 'integer',
+            'not_applied_at' => 'datetime',
         ];
     }
 

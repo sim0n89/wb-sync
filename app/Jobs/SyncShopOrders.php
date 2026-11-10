@@ -39,6 +39,8 @@ class SyncShopOrders implements ShouldBeUnique, ShouldQueue
         }
 
         $client = WildberriesClient::forShop($this->shop);
+        $startedAt = now();
+        $isComplete = false;
 
         for ($page = 0; $page < self::MAX_PAGES; $page++) {
             if ($this->isTimeBudgetExceeded()) {
@@ -54,6 +56,8 @@ class SyncShopOrders implements ShouldBeUnique, ShouldQueue
             }
 
             if ($ordersPage->isEmpty()) {
+                $isComplete = true;
+
                 break;
             }
 
@@ -64,13 +68,17 @@ class SyncShopOrders implements ShouldBeUnique, ShouldQueue
             );
 
             if ($ordersPage->next === $this->shop->orders_cursor) {
+                $isComplete = true;
+
                 break;
             }
 
             $this->shop->update(['orders_cursor' => $ordersPage->next]);
         }
 
-        $this->shop->update(['orders_synced_at' => now()]);
+        if ($isComplete) {
+            $this->shop->update(['orders_synced_at' => $startedAt]);
+        }
     }
 
     /**

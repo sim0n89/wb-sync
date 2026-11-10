@@ -26,11 +26,11 @@ class StocksController extends Controller
         $stocks = $request->input('stocks');
 
         if (! is_array($stocks) || $stocks === [] || count($stocks) > 1000) {
-            return $this->getRejection(400, 'IncorrectRequestBody', 'Incorrect required body');
+            return $guard->getStocksError(400, 'IncorrectRequestBody', 'Incorrect required body');
         }
 
         if ($store->isWarehouseBlocked($token, $warehouseId)) {
-            return $this->getRejection(406, 'WarehouseStocksUpdateBlock', 'The warehouse is processing');
+            return $guard->getStocksError(406, 'WarehouseStocksUpdateBlock', 'The warehouse is processing');
         }
 
         $amounts = [];
@@ -41,13 +41,15 @@ class StocksController extends Controller
             }
         }
 
+        $saved = array_diff_key($amounts, $store->getDroppedChrts($token));
+
         $rejectedResponse = $this->getRejectedItems($store->getRejections($token), $amounts);
 
         if ($rejectedResponse !== null) {
             return $rejectedResponse;
         }
 
-        $store->saveStocks($token, $warehouseId, $amounts);
+        $store->saveStocks($token, $warehouseId, $saved);
 
         return response()->noContent();
     }
@@ -78,10 +80,5 @@ class StocksController extends Controller
         }
 
         return response()->json(array_values($errors), 409);
-    }
-
-    private function getRejection(int $status, string $code, string $message): JsonResponse
-    {
-        return response()->json([['code' => $code, 'message' => $message]], $status);
     }
 }

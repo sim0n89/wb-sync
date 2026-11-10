@@ -15,14 +15,14 @@ class StocksRejectedException extends Exception
     ];
 
     /**
-     * @param  array<int, int>  $chrtIds
+     * @param  array<int, array{code: string, message: string}>  $itemErrors  chrtId => error
      */
     public function __construct(
         public readonly StocksErrorType $type,
         public readonly int $status,
         public readonly string $errorCode,
         string $message,
-        public readonly array $chrtIds = [],
+        public readonly array $itemErrors = [],
         ?Throwable $previous = null,
     ) {
         parent::__construct($message, 0, $previous);
@@ -35,39 +35,102 @@ class StocksRejectedException extends Exception
 
     public static function fromResponse(Response $response, ?Throwable $previous = null): self
     {
-        $errors = $response->json();
+        $groups = self::getGroups($response);
+        $status = $response->status();
+        $type = self::getType($status, $groups);
 
-        if (! is_array($errors) || ! array_is_list($errors)) {
-            $errors = [$errors];
-        }
+        $main = null;
+        $itemErrors = [];
 
-        $error = is_array($errors[0] ?? null) ? $errors[0] : [];
-        $code = (string) ($error['code'] ?? 'Unknown');
-        $chrtIds = [];
+        foreach ($groups as $group) {
+            if ($type === StocksErrorType::Item && in_array($group['code'], self::TEMPORARY_CODES, true)) {
+                continue;
+            }
 
-        foreach ($errors as $item) {
-            foreach ((array) ($item['data'] ?? []) as $data) {
-                $chrtId = is_array($data) ? ($data['chrtId'] ?? null) : $data;
+            $main ??= $group;
 
-                if (is_numeric($chrtId)) {
-                    $chrtIds[] = (int) $chrtId;
-                }
+            foreach ($group['chrtIds'] as $chrtId) {
+                $itemErrors[$chrtId] ??= ['code' => $group['code'], 'message' => $group['message']];
             }
         }
 
-        return new self(
-            self::getType($response->status(), $code),
-            $response->status(),
-            $code,
-            (string) ($error['message'] ?? $response->body()),
-            array_values(array_unique($chrtIds)),
-            $previous,
-        );
+        $main ??= $groups[0];
+
+        return new self($type, $status, $main['code'], $main['message'], $itemErrors, $previous);
     }
 
-    private static function getType(int $status, string $code): StocksErrorType
+    /**
+     * @return array<int, array{code: string, message: string, chrtIds: array<int, int>}>
+     */
+    private static function getGroups(Response $response): array
     {
-        if ($status === 406 || in_array($code, self::TEMPORARY_CODES, true)) {
+        $errors = $response->json();
+
+        if (! is_array($errors) || $errors === []) {
+            return [['code' => 'Unknown', 'message' => $response->body(), 'chrtIds' => []]];
+        }
+
+        if (! array_is_list($errors)) {
+            $errors = [$errors];
+        }
+
+        $groups = [];
+
+        foreach ($errors as $error) {
+            $error = is_array($error) ? $error : [];
+
+            $groups[] = [
+                'code' => (string) ($error['code'] ?? 'Unknown'),
+                'message' => (string) ($error['message'] ?? $response->body()),
+                'chrtIds' => self::getDataChrtIds($error['data'] ?? []),
+            ];
+        }
+
+        return $groups;
+    }
+
+    /**
+     * @return array<int, int>
+     */
+    private static function getDataChrtIds(mixed $data): array
+    {
+        if (! is_array($data)) {
+            return [];
+        }
+
+        if (! array_is_list($data)) {
+            $data = [$data];
+        }
+
+        $chrtIds = [];
+
+        foreach ($data as $entry) {
+            if (is_array($entry) && is_numeric($entry['chrtId'] ?? null)) {
+                $chrtIds[] = (int) $entry['chrtId'];
+            }
+        }
+
+        return $chrtIds;
+    }
+
+    /**
+     * @param  array<int, array{code: string, message: string, chrtIds: array<int, int>}>  $groups
+     */
+    private static function getType(int $status, array $groups): StocksErrorType
+    {
+        if ($status === 406) {
+            return StocksErrorType::Temporary;
+        }
+
+        $allTemporary = true;
+
+        foreach ($groups as $group) {
+            if (! in_array($group['code'], self::TEMPORARY_CODES, true)) {
+                $allTemporary = false;
+            }
+        }
+
+        if ($allTemporary) {
             return StocksErrorType::Temporary;
         }
 

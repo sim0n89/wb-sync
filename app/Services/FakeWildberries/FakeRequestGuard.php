@@ -39,6 +39,11 @@ class FakeRequestGuard
         return null;
     }
 
+    public function getStocksError(int $status, string $code, string $message): JsonResponse
+    {
+        return response()->json([['code' => $code, 'message' => $message]], $status);
+    }
+
     public function getError(int $status, string $title, string $detail): JsonResponse
     {
         return response()->json([

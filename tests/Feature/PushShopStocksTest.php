@@ -132,7 +132,7 @@ test('each warehouse gets its own request and inactive warehouse is skipped', fu
     expect($urls)->toBe(['https://wb.test/api/v3/stocks/1', 'https://wb.test/api/v3/stocks/2']);
 });
 
-test('stock changed during upload is not marked with the old amount and goes in the next run', function () {
+test('stock changed during upload remembers what wildberries got and goes in the next run', function () {
     $shop = Shop::factory()->create();
     $stock = stockFor(Warehouse::factory()->for($shop)->create(), 101, 10);
 
@@ -151,13 +151,37 @@ test('stock changed during upload is not marked with the old amount and goes in 
     PushShopStocks::dispatchSync($shop);
 
     expect($sentAmounts)->toBe([10])
-        ->and($stock->fresh()->synced_amount)->toBeNull()
+        ->and($stock->fresh()->synced_amount)->toBe(10)
         ->and(Stock::needsSync()->pluck('id')->all())->toBe([$stock->id]);
 
     PushShopStocks::dispatchSync($shop);
 
     expect($sentAmounts)->toBe([10, 4])
         ->and($stock->fresh()->synced_amount)->toBe(4);
+});
+
+test('amount that goes away and comes back during upload is sent again', function () {
+    $shop = Shop::factory()->create();
+    $stock = stockFor(Warehouse::factory()->for($shop)->create(), 101, 5, 5);
+    $stock->update(['amount' => 7]);
+
+    $sentAmounts = [];
+
+    Http::fake(function (Request $request) use ($stock, &$sentAmounts) {
+        $sentAmounts[] = $request->data()['stocks'][0]['amount'];
+
+        if (count($sentAmounts) === 1) {
+            Stock::whereKey($stock->id)->update(['amount' => 5]);
+        }
+
+        return Http::response(null, 204);
+    });
+
+    PushShopStocks::dispatchSync($shop);
+    PushShopStocks::dispatchSync($shop);
+
+    expect($sentAmounts)->toBe([7, 5])
+        ->and($stock->fresh()->synced_amount)->toBe(5);
 });
 
 test('run stops when the time budget is spent and the rest goes next time', function () {
@@ -181,6 +205,29 @@ test('run stops when the time budget is spent and the rest goes next time', func
     PushShopStocks::dispatchSync($shop);
 
     expect($later->fresh()->synced_amount)->toBe(2);
+});
+
+test('warehouse pushed longest ago goes first so a busy one cannot starve the rest', function () {
+    $this->freezeTime();
+
+    $shop = Shop::factory()->create();
+    $busy = Warehouse::factory()->for($shop)->create(['wb_warehouse_id' => 1]);
+    stockFor($busy, 101, 1, 1);
+    stockFor($busy, 102, 5);
+    $quiet = stockFor(Warehouse::factory()->for($shop)->create(['wb_warehouse_id' => 2]), 103, 2);
+
+    Http::fake(function () {
+        $this->travel(250)->seconds();
+
+        return Http::response(null, 204);
+    });
+
+    PushShopStocks::dispatchSync($shop);
+
+    Http::assertSent(function (Request $request) {
+        return $request->url() === 'https://wb.test/api/v3/stocks/2';
+    });
+    expect($quiet->fresh()->synced_amount)->toBe(2);
 });
 
 test('rate limit after a real error does not hide the error', function () {
@@ -277,7 +324,41 @@ test('connection error marks upload as failed instead of leaving it in progress'
         ->and($upload->error)->toContain('timed out');
 });
 
-test('synced stocks are marked with one query per distinct amount', function () {
+test('push with unknown outcome is sent again even if the amount returns to the old value', function () {
+    $shop = Shop::factory()->create();
+    $stock = stockFor(Warehouse::factory()->for($shop)->create(), 101, 5, 5);
+    $stock->update(['amount' => 8]);
+
+    Http::fake(function () {
+        throw new ConnectionException('cURL error 28: Operation timed out');
+    });
+
+    expect(function () use ($shop) {
+        PushShopStocks::dispatchSync($shop);
+    })->toThrow(ConnectionException::class);
+
+    $stock->refresh();
+    $stock->update(['amount' => 5]);
+
+    expect($stock->synced_amount)->toBeNull()
+        ->and(Stock::needsSync()->pluck('id')->all())->toBe([$stock->id]);
+});
+
+test('push rejected by wildberries keeps what was synced before', function () {
+    $shop = Shop::factory()->create();
+    $stock = stockFor(Warehouse::factory()->for($shop)->create(), 101, 5, 5);
+    $stock->update(['amount' => 8]);
+
+    Http::fake(['wb.test/*' => Http::response(['code' => 'IncorrectRequestBody', 'message' => 'Incorrect required body'], 400)]);
+
+    expect(function () use ($shop) {
+        PushShopStocks::dispatchSync($shop);
+    })->toThrow(StocksRejectedException::class);
+
+    expect($stock->fresh()->synced_amount)->toBe(5);
+});
+
+test('synced stocks are marked with one query per distinct amount plus one to clear old errors', function () {
     Http::fake(['wb.test/*' => Http::response(null, 204)]);
 
     $shop = Shop::factory()->create();
@@ -295,7 +376,7 @@ test('synced stocks are marked with one query per distinct amount', function () 
 
     PushShopStocks::dispatchSync($shop);
 
-    expect($updates)->toBe(3)
+    expect($updates)->toBe(4)
         ->and(Stock::needsSync()->count())->toBe(0);
 });
 

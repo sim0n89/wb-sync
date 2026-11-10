@@ -29,6 +29,10 @@ class PushShopStocks implements ShouldBeUnique, ShouldQueue
 
     public const int MAX_BATCHES_PER_WAREHOUSE = 100;
 
+    public const int MAX_SPLIT_REQUESTS = 32;
+
+    private int $splitRequestsLeft = 0;
+
     /**
      * Create a new job instance.
      */
@@ -37,6 +41,21 @@ class PushShopStocks implements ShouldBeUnique, ShouldQueue
     public function getShop(): Shop
     {
         return $this->shop;
+    }
+
+    public static function getStocksLockKey(Shop $shop): string
+    {
+        return 'stocks-'.$shop->id;
+    }
+
+    protected function getSharedOverlapKey(): ?string
+    {
+        return self::getStocksLockKey($this->shop);
+    }
+
+    protected function shouldWaitWhenBusy(): bool
+    {
+        return true;
     }
 
     /**
@@ -50,8 +69,16 @@ class PushShopStocks implements ShouldBeUnique, ShouldQueue
 
         $client = WildberriesClient::forShop($this->shop);
         $firstError = null;
+        $this->splitRequestsLeft = self::MAX_SPLIT_REQUESTS;
 
-        foreach ($this->shop->warehouses()->active()->get() as $warehouse) {
+        $warehouses = $this->shop->warehouses()
+            ->active()
+            ->withMax('stocks', 'synced_at')
+            ->orderBy('stocks_max_synced_at')
+            ->orderBy('id')
+            ->get();
+
+        foreach ($warehouses as $warehouse) {
             if ($this->isTimeBudgetExceeded()) {
                 break;
             }
@@ -135,6 +162,10 @@ class PushShopStocks implements ShouldBeUnique, ShouldQueue
                 return;
             }
 
+            if (! $this->isDefinitelyRejected($e)) {
+                Stock::whereKey($batch->modelKeys())->update(['synced_amount' => null, 'synced_at' => null]);
+            }
+
             throw $e;
         }
 
@@ -148,41 +179,68 @@ class PushShopStocks implements ShouldBeUnique, ShouldQueue
         });
     }
 
+    private function isDefinitelyRejected(Throwable $e): bool
+    {
+        if ($e instanceof RateLimitExceededException || $e instanceof StocksRejectedException) {
+            return true;
+        }
+
+        return $e instanceof RequestException && $e->response->clientError();
+    }
+
     /**
      * @param  Collection<int, Stock>  $batch
      */
     private function handleRejectedItems(WildberriesClient $client, Warehouse $warehouse, Collection $batch, StocksRejectedException $e): void
     {
-        $rejected = new Collection;
+        $rejectedByCode = [];
         $rest = new Collection;
 
         foreach ($batch as $stock) {
-            if (in_array($stock->size->chrt_id, $e->chrtIds, true)) {
-                $rejected->push($stock);
-            } else {
+            $error = $e->itemErrors[$stock->size->chrt_id] ?? null;
+
+            if ($error === null) {
                 $rest->push($stock);
+
+                continue;
             }
+
+            $rejectedByCode[$error['code']]['message'] = $error['message'];
+            $rejectedByCode[$error['code']]['stocks'][] = $stock;
         }
 
-        if ($rejected->isNotEmpty()) {
-            $this->markStocksFailed($rejected, $e);
-
-            if ($rest->isNotEmpty()) {
-                $this->pushBatch($client, $warehouse, $rest);
+        if ($rejectedByCode !== []) {
+            foreach ($rejectedByCode as $code => $rejected) {
+                $this->markStocksFailed(new Collection($rejected['stocks']), $code, $rejected['message']);
             }
+
+            $this->pushRemaining($client, $warehouse, $rest);
 
             return;
         }
 
         if ($batch->count() === 1) {
-            $this->markStocksFailed($batch, $e);
+            $this->markStocksFailed($batch, $e->errorCode, $e->getMessage());
 
             return;
         }
 
         foreach ($batch->chunk((int) ceil($batch->count() / 2)) as $half) {
-            $this->pushBatch($client, $warehouse, new Collection($half->values()->all()));
+            $this->pushRemaining($client, $warehouse, $half);
         }
+    }
+
+    /**
+     * @param  Collection<int, Stock>  $stocks
+     */
+    private function pushRemaining(WildberriesClient $client, Warehouse $warehouse, Collection $stocks): void
+    {
+        if ($stocks->isEmpty() || $this->splitRequestsLeft <= 0 || $this->isTimeBudgetExceeded()) {
+            return;
+        }
+
+        $this->splitRequestsLeft--;
+        $this->pushBatch($client, $warehouse, $stocks);
     }
 
     /**
@@ -193,34 +251,31 @@ class PushShopStocks implements ShouldBeUnique, ShouldQueue
         $now = now();
 
         foreach ($this->getIdsByAmount($batch) as $amount => $ids) {
-            Stock::whereKey($ids)
-                ->where('amount', $amount)
-                ->update([
-                    'synced_amount' => $amount,
-                    'synced_at' => $now,
-                    'failed_amount' => null,
-                    'failed_at' => null,
-                    'failed_code' => null,
-                    'failed_message' => null,
-                ]);
+            Stock::whereKey($ids)->update([
+                'synced_amount' => $amount,
+                'synced_at' => $now,
+            ]);
         }
+
+        Stock::whereKey($batch->modelKeys())
+            ->whereNotNull('failed_code')
+            ->update(Stock::NO_FAILURE);
     }
 
     /**
      * @param  Collection<int, Stock>  $stocks
      */
-    private function markStocksFailed(Collection $stocks, StocksRejectedException $e): void
+    private function markStocksFailed(Collection $stocks, string $code, string $message): void
     {
         $now = now();
 
         foreach ($this->getIdsByAmount($stocks) as $amount => $ids) {
             Stock::whereKey($ids)
-                ->where('amount', $amount)
                 ->update([
                     'failed_amount' => $amount,
                     'failed_at' => $now,
-                    'failed_code' => $e->errorCode,
-                    'failed_message' => Str::limit($e->getMessage(), 1000),
+                    'failed_code' => $code,
+                    'failed_message' => Str::limit($message, 1000),
                 ]);
         }
     }

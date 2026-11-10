@@ -2,11 +2,13 @@
 
 use App\Jobs\PushShopStocks;
 use App\Jobs\SyncShopOrders;
+use App\Jobs\VerifyShopStocks;
 use App\Models\Shop;
 
 dataset('shop jobs', [
     SyncShopOrders::class,
     PushShopStocks::class,
+    VerifyShopStocks::class,
 ]);
 
 test('redis retry_after is longer than job timeout', function (string $jobClass) {
@@ -39,8 +41,29 @@ test('failed attempts are retried with growing pauses', function (string $jobCla
         ->and($job->tries)->toBe(20);
 })->with('shop jobs');
 
-test('unique lock outlives all retry pauses', function (string $jobClass) {
+test('unique lock outlives one run plus the longest pause but does not stall a shop for long', function (string $jobClass) {
     $job = new $jobClass(new Shop);
 
-    expect($job->uniqueFor)->toBeGreaterThan(array_sum($job->backoff()) + $job->timeout * $job->maxExceptions);
+    expect($job->uniqueFor)->toBeGreaterThan($job->timeout + max($job->backoff()))
+        ->and($job->uniqueFor)->toBeLessThanOrEqual(900);
 })->with('shop jobs');
+
+test('stocks push and verification share a lock, a busy push waits and a busy verification is skipped', function () {
+    $shop = new Shop;
+    $shop->id = 7;
+
+    $push = (new PushShopStocks($shop))->middleware()[0];
+    $verify = (new VerifyShopStocks($shop))->middleware()[0];
+
+    expect($push->key)->toBe('stocks-7')
+        ->and($push->shareKey)->toBeTrue()
+        ->and($push->releaseAfter)->toBe(60)
+        ->and($verify->key)->toBe('stocks-7')
+        ->and($verify->shareKey)->toBeTrue()
+        ->and($verify->releaseAfter)->toBeNull();
+
+    $orders = (new SyncShopOrders($shop))->middleware()[0];
+
+    expect($orders->shareKey)->toBeFalse()
+        ->and($orders->releaseAfter)->toBeNull();
+});

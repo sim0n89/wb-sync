@@ -59,6 +59,28 @@ class FakeStockStore
         return $this->cache->get($this->getKey($token, 'rejections'), []);
     }
 
+    public function setChrtDropped(string $token, int $chrtId, bool $dropped): void
+    {
+        $key = $this->getKey($token, 'dropped');
+        $droppedIds = $this->cache->get($key, []);
+
+        if ($dropped) {
+            $droppedIds[$chrtId] = true;
+        } else {
+            unset($droppedIds[$chrtId]);
+        }
+
+        $this->cache->forever($key, $droppedIds);
+    }
+
+    /**
+     * @return array<int, true> chrtId => true
+     */
+    public function getDroppedChrts(string $token): array
+    {
+        return $this->cache->get($this->getKey($token, 'dropped'), []);
+    }
+
     public function setWarehouseBlocked(string $token, int $warehouseId, bool $blocked): void
     {
         $key = $this->getKey($token, 'blocked');
